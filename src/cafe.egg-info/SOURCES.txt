@@ -1,0 +1,8 @@
+LICENSE
+README.md
+pyproject.toml
+src/cafe/escala.py
+src/cafe.egg-info/PKG-INFO
+src/cafe.egg-info/SOURCES.txt
+src/cafe.egg-info/dependency_links.txt
+src/cafe.egg-info/top_level.txt

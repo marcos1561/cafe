@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cafe"
+version = "0.0.1"
+authors = [
+  { name="Marcos Pasa", email="marcospasa130@gmail.com" },
+]
+description = "Utilidades para o café da física UFRGS."
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  pandas,
+  pulp,
+  odfpy,
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]
