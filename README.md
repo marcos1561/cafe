@@ -42,7 +42,7 @@ sched.generate(
 # Salva a escala como .csv
 sched.save("escala.csv")
 
-# Calcula e salva a carga horários semanal
+# Calcula e salva a carga horária semanal
 # da escala gerada
 sched.calc_work_load("carga.csv")
 ```
