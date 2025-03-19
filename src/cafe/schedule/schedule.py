@@ -55,7 +55,7 @@ class Scheduler:
         self.x = None
         self.schedule = None
 
-    def add_fix_people_hours(self, hours: str, people_number: int):
+    def add_fix_people_turns(self, hours: str, people_number: int):
         "Add hours where there should be `people_number` people at the cafe."
         self.fix_people_hours.append(
             FixPeopleHours(hours=hours, people_number=people_number)
