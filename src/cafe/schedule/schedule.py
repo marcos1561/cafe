@@ -9,7 +9,8 @@ FixPeopleHours = namedtuple('FixPeopleHours', ['hours', 'people_number'])
 
 class Scheduler:
     def __init__(self, open_turn: str, close_turn: str, desired_work_load: dict=None,
-        max_open_per_people=2, max_close_per_people=2, max_load_per_day=None,         
+        max_open_per_people=2, max_close_per_people=2, max_load_per_day=None,
+        default_people_number_per_turn=2,         
     ):
         '''
         System to generate a schedule.
@@ -34,6 +35,10 @@ class Scheduler:
         
         max_close_per_people:
             Maximum number of times a given person close the cafe
+        
+        default_people_number_per_turn:
+            Default number of people per turn. This constraint is override for turns
+            specified by `add_fix_people_turns()`
 
         max_load_per_day:
             Maximum number of hours a given person works per day. If None there is no limit.
@@ -43,6 +48,7 @@ class Scheduler:
         
         self.max_open_per_people = max_open_per_people
         self.max_close_per_people = max_close_per_people
+        self.default_people_number_per_turn = default_people_number_per_turn
 
         if desired_work_load is None:
             desired_work_load = {}
@@ -89,18 +95,24 @@ class Scheduler:
         ), "Maximize Preferred Hours"
 
         # Constraint: Each shift needs 2 or 3 people
+        turns_with_fix_people = set()
         for fix_people_hours in self.fix_people_hours:
             people_number = fix_people_hours.people_number
             hours = fix_people_hours.hours
+
+            turns_with_fix_people.update(hours)
 
             for d in week_days:
                 for h in work_turns:
                     if h in hours:
                         prob += lpSum(x[p][d][h] for p in peoples) == people_number, f"Shift_{d}_{h}_{people_number}_People"
-                    else:
-                        prob += lpSum(x[p][d][h] for p in peoples) <= 2, f"Shift_{d}_{h}_max_2_people"
-                        prob += lpSum(x[p][d][h] for p in peoples) >= 1, f"Shift_{d}_{h}_min_1_people"
-                
+
+        # Constraint: Default shift needs 2 people 
+        for d in week_days:
+            for h in work_turns:
+                if h in turns_with_fix_people:
+                    continue
+                prob += lpSum(x[p][d][h] for p in peoples) == self.default_people_number_per_turn, f"Shift_{d}_{h}_max_default_people"
 
         # Constraint: Ensure that each person is only scheduled when available
         for p in peoples:
