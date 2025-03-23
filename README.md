@@ -4,7 +4,11 @@ Utilidades para o Café da Física.
 # Instalação
 Instale o pacote do Café da Física com o seguinte comando
 ```bash
-pip install -e "git+https://github.com/marcos1561/cafe.git/#egg=cafe"
+pip install "git+https://github.com/marcos1561/cafe.git/#egg=cafe"
+```
+e atualize o mesmo com
+```bash
+pip install --upgrade "git+https://github.com/marcos1561/cafe.git/#egg=cafe"
 ```
 
 # Escala
