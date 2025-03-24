@@ -23,15 +23,16 @@ sched = schedule.Scheduler(
     close_turn="15:30-16:00",
 )
 
-# Específica quais são os turnos de pico
-# exigindo que três pessoas estejam neles.
+# Exige ter 3 pessoas de 07:00 até 11:00 e
+# de 12:30 até 15:30
 sched.add_fix_people_turns(
-    hours={
-        "08:00-08:30", 
-        "10:00-10:30", 
-        "13:00-13:30", 
-        "15:00-15:30",
-    },
+    turns=TurnList.from_start_end(
+        start_turn="07:00-07:30",
+        end_turn="10:30-11:00", 
+    ) + TurnList.from_start_end(
+        start_turn="12:30-13:00",
+        end_turn="15:00-15:30", 
+    ),
     people_number=3,
 )
 
@@ -42,6 +43,11 @@ sched.generate(
     availability_path="possibilidade.ods",
     sheet_name="sheet_name",
 )
+
+# Mostra onde a disponibilidade foi violada
+print("Violações da disponibilidade:")
+for people, turns in sched.problems.availability.items():
+    print(people, turns)
 
 # Salva a escala como .csv
 sched.save("escala.csv")

@@ -3,9 +3,14 @@ import pandas as pd
 from collections import namedtuple
 
 from . import reader
+from .turns import TurnList
 from .constants import *
 
-FixPeopleHours = namedtuple('FixPeopleHours', ['hours', 'people_number'])
+FixPeopleHours = namedtuple('FixPeopleHours', ['turns', 'people_number'])
+
+class ScheduleProblems:
+    def __init__(self):
+        self.availability: dict = None
 
 class Scheduler:
     def __init__(self, open_turn: str, close_turn: str, desired_work_load: dict=None,
@@ -16,7 +21,7 @@ class Scheduler:
         System to generate a schedule.
 
         OBS: 
-            A turn is a string with the fallowing structure: "HH:MM-HH:MM".
+            A turn is a string with the following structure: "HH:MM-HH:MM".
             Example: "07:30-08:00" 
 
         Parameters
@@ -46,6 +51,11 @@ class Scheduler:
         self.open_turn = open_turn
         self.close_turn = close_turn
         
+        self.work_turns = TurnList.from_start_end(
+            start_turn=self.open_turn,
+            end_turn=self.close_turn,
+        )
+
         self.max_open_per_people = max_open_per_people
         self.max_close_per_people = max_close_per_people
         self.default_people_number_per_turn = default_people_number_per_turn
@@ -60,16 +70,27 @@ class Scheduler:
 
         self.x = None
         self.schedule = None
+        self.problems = ScheduleProblems()
 
-    def add_fix_people_turns(self, hours: str, people_number: int):
-        "Add hours where there should be `people_number` people at the cafe."
+    def add_fix_people_turns(self, turns: TurnList, people_number: int):
+        "Add turn where there should be `people_number` people at the cafe."
+        if isinstance(turns, list):
+            turns = TurnList(turns)
+
         self.fix_people_hours.append(
-            FixPeopleHours(hours=hours, people_number=people_number)
+            FixPeopleHours(turns=turns, people_number=people_number)
         )
 
     def generate(self, preference_path, availability_path, sheet_name):
+        '''
+        Generates schedule trying to maximize peoples preference and respecting
+        peoples availability. After running this method, one can save the
+        schedule calling `save()`.
+        '''
         preference: dict = reader.read_schedule(preference_path, sheet_name)
         availability: dict = reader.read_schedule(availability_path, sheet_name)
+
+        work_turns = self.work_turns.turns_str
 
         for p in preference.keys():
             if p not in availability.keys():
@@ -98,13 +119,13 @@ class Scheduler:
         turns_with_fix_people = set()
         for fix_people_hours in self.fix_people_hours:
             people_number = fix_people_hours.people_number
-            hours = fix_people_hours.hours
+            turns = fix_people_hours.turns.turns_str
 
-            turns_with_fix_people.update(hours)
+            turns_with_fix_people.update(turns)
 
             for d in week_days:
                 for h in work_turns:
-                    if h in hours:
+                    if h in turns:
                         prob += lpSum(x[p][d][h] for p in peoples) == people_number, f"Shift_{d}_{h}_{people_number}_People"
 
         # Constraint: Default shift needs 2 people 
@@ -168,20 +189,39 @@ class Scheduler:
                     if x[p][d][h].value() == 1:
                         schedule[d][h].append(p)
         
+        self.problems.availability = self.check_availability(x, availability)
+
         self.schedule = schedule
         self.x = x
+
+    def check_availability(self, variables: dict, availability: dict):
+        "Returns a list of where availability was violated"
+        problems = {}
+        for people, days in variables.items():
+            days: dict
+            for day, turns in days.items():
+                turns: dict
+                for turn, var in turns.items() :
+                    was_summoned = var.value() == 1
+                    is_available = turn in availability[people].get(day, set()) 
+                    if was_summoned and not is_available:
+                        if people not in problems:
+                            problems[people] = []
+
+                        problems[people].append((day, turn))
+        return problems                    
 
     def show(self):
         "Show schedule generated."
         for d in week_days:
             print(f"\nEscala para {d.capitalize()}:")
-            for h in work_turns:
+            for h in self.work_turns.turns_str:
                 print(f"{h}: {', '.join(self.schedule[d].get(h, []))}")
 
     def save(self, path):
         "Save schedule generated at `path` as a .csv"
         data = []
-        for h in work_turns:
+        for h in self.work_turns.turns_str:
             row = h.split("-")
             for d in week_days:
                 row.append(", ".join(self.schedule[d][h]))
@@ -196,7 +236,7 @@ class Scheduler:
         for p in self.x.keys():
             p_work = 0
             for d in week_days:
-                for h in work_turns:
+                for h in self.work_turns.turns_str:
                     p_work += self.x[p][d][h].value()
             total_work.append([p, p_work / 2])
         
