@@ -14,11 +14,11 @@ pip install --upgrade "git+https://github.com/marcos1561/cafe.git/#egg=cafe"
 # Escala
 O sub-pacote `cafe.schedule` tem como função gerar a escala semanal do café. Exemplo:
 ```python
-from cafe import schedule
+from cafe.schedule import Scheduler, TurnList
 
 # Cria o objeto gerador de escala
 # informando qual turno o café abre e fecha
-sched = schedule.Scheduler(
+sched = Scheduler(
     open_turn="07:30-08:00",
     close_turn="15:30-16:00",
 )
