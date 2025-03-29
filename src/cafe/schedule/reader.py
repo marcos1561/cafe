@@ -1,4 +1,5 @@
 import pandas as pd
+import datetime
 from .constants import week_days
 
 def read_schedule(path, sheet):
@@ -18,9 +19,17 @@ def read_schedule(path, sheet):
 
     schedule = {}
 
+    def hour_to_str(hour):
+        if isinstance(hour, datetime.time):
+            return f"{hour.hour:02}:{hour.minute:02}"
+        elif isinstance(hour, str):
+            return ":".join(hour.split(":")[:2])
+        else:
+            return hour
+
     # Iterate over data rows
     for _, row in data.iterrows():
-        hour = f"{row['Início']}-{row['Fim']}"
+        hour = f"{hour_to_str(row['Início'])}-{hour_to_str(row['Fim'])}"
         
         for d in week_days:
             names = row[d]
