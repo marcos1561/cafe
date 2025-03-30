@@ -2,7 +2,7 @@ import pandas as pd
 import datetime
 from .constants import week_days
 
-def read_schedule(path, sheet):
+def read_schedule(path, sheet=None):
     '''
     Read schedule from .ods file at `path` in the
     sheet `sheet`.
@@ -16,6 +16,9 @@ def read_schedule(path, sheet):
     '''
     # Read the .ods file
     data = pd.read_excel(path, sheet_name=sheet, engine='odf')
+
+    if sheet is None:
+        data = list(data.values())[0]
 
     schedule = {}
 

@@ -19,12 +19,12 @@ sched.add_fix_people_turns(
 sched.generate(
     preference_path="preferencia.ods",
     availability_path="possibilidade.ods",
-    sheet_name="Sheet1",
 )
 
 print("Violações da disponibilidade:")
 for p, turns in sched.problems.availability.items():
     print(p, turns)
+print()
 
 sched.save("escala.csv")
 sched.calc_work_load("carga.csv")

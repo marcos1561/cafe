@@ -1,10 +1,14 @@
 from pulp import LpProblem, LpVariable, lpSum, LpMaximize, LpStatus
 import pandas as pd
 from collections import namedtuple
+import logging
 
 from . import reader
 from .turns import TurnList
 from .constants import *
+
+# Define a logger for this module
+logger = logging.getLogger(__name__)
 
 FixPeopleHours = namedtuple('FixPeopleHours', ['turns', 'people_number'])
 
@@ -13,12 +17,15 @@ class ScheduleProblems:
         self.availability: dict = None
 
 class Scheduler:
-    def __init__(self, open_turn: str, close_turn: str, desired_work_load: dict=None,
-        max_open_per_people=2, max_close_per_people=2, max_load_per_day=None,
-        default_people_number_per_turn=2,         
+    def __init__(self, open_turn: str, close_turn: str, 
+        people_boost:dict[str, float]=None, desired_work_load: dict[str, float]=None,
+        max_open_per_people=2, max_close_per_people=2, 
+        max_load_per_day=None, max_load_per_week=None, min_load_per_week=None,
+        default_people_number_per_turn=2,
     ):
         '''
-        System to generate a schedule.
+        System to generate a schedule. After creating this object, one should call `self.generate()`
+        to create the schedule.
 
         OBS: 
             A turn is a string with the following structure: "HH:MM-HH:MM".
@@ -32,21 +39,29 @@ class Scheduler:
         close_turn:
             When the cafe closes
 
+        people_boost:
+            Map between people and its boost in the objective function. If its value
+            is greater/less than 1, for a give person, this person will tend to gain more/less
+            work hours. 
+
         desired_work_load:
             Map between people and its desired total work load in the week in hours.
         
         max_open_per_people:
-            Maximum number of times a given person open the cafe
+            Maximum number of times a given person open the cafe.
         
         max_close_per_people:
-            Maximum number of times a given person close the cafe
+            Maximum number of times a given person close the cafe.
+        
+        max_load_per_day:
+            Maximum number of hours a given person works per day. If None there is no limit.
+
+        max_load_per_week, min_load_per_week:
+            Maximum/Minimum number of hours a person should work in a week. If `None`, there is no limit.
         
         default_people_number_per_turn:
             Default number of people per turn. This constraint is override for turns
             specified by `add_fix_people_turns()`
-
-        max_load_per_day:
-            Maximum number of hours a given person works per day. If None there is no limit.
         '''
         self.open_turn = open_turn
         self.close_turn = close_turn
@@ -58,15 +73,22 @@ class Scheduler:
 
         self.max_open_per_people = max_open_per_people
         self.max_close_per_people = max_close_per_people
+        self.max_load_per_day = max_load_per_day
+        self.max_load_per_week = max_load_per_week
+        self.min_load_per_week = min_load_per_week
         self.default_people_number_per_turn = default_people_number_per_turn
 
         if desired_work_load is None:
             desired_work_load = {}
         self.work_load = desired_work_load
-
-        self.max_load_per_day = max_load_per_day
+        
+        if people_boost is None:
+            people_boost = {}
+        self.people_boost = people_boost
 
         self.fix_people_hours: list[FixPeopleHours] = []
+
+        self.preference_work_load: dict = None
 
         self.x = None
         self.schedule = None
@@ -81,22 +103,30 @@ class Scheduler:
             FixPeopleHours(turns=turns, people_number=people_number)
         )
 
-    def generate(self, preference_path, availability_path, sheet_name):
+    def generate(self, preference_path, availability_path, preference_sheet_name=None, availability_sheet_name=None):
         '''
         Generates schedule trying to maximize peoples preference and respecting
         peoples availability. After running this method, one can save the
         schedule calling `save()`.
         '''
-        preference: dict = reader.read_schedule(preference_path, sheet_name)
-        availability: dict = reader.read_schedule(availability_path, sheet_name)
+        logging.info("Gerando a escala..")
+
+        preference: dict = reader.read_schedule(preference_path, preference_sheet_name)
+        availability: dict = reader.read_schedule(availability_path, availability_sheet_name)
 
         work_turns = self.work_turns.turns_str
 
-        for p in preference.keys():
+        for p, day_turn in preference.items():
             if p not in availability.keys():
                 availability[p] = preference[p]
+                continue
 
-        peoples = list(availability.keys())
+            for day, turns in day_turn.items():
+                for t in turns:
+                    if t not in availability[p][day]:
+                        availability[p][day].add(t)
+
+        people = list(availability.keys())
 
         # Creating decision variables x[person][day][hour]
         x = {
@@ -104,15 +134,28 @@ class Scheduler:
                 d: {h: LpVariable(f"x_{p}_{d}_{h}", cat="Binary") for h in work_turns}
                 for d in week_days
             }
-            for p in peoples
+            for p in people
         }
+
+        for p in people:
+            if p not in preference.keys():
+                logging.warning(f"A pessoa {p} não preencheu a preferência.")
 
         # Creating the maximization problem (prioritizing preferences)
         prob = LpProblem("Weekly_Schedule_Generation", LpMaximize)
 
+        preference_work_load = {}
+        for p in preference: 
+            preference_work_load[p] = 0
+            for day_turns in preference[p].values(): 
+                preference_work_load[p] += len(day_turns)
+        self.preference_work_load = preference_work_load
+            
+        # preference_work_load["Floriano"] = 1000
+
         # Objective function: Maximize allocations in preferred hours
         prob += lpSum(
-            x[p][d][h] for p in preference for d in week_days for h in preference[p][d] if h in x[p][d]
+            x[p][d][h] * (1/preference_work_load[p] * self.people_boost.get(p, 1)) for p in preference for d in week_days for h in preference[p][d] if h in x[p][d]
         ), "Maximize Preferred Hours"
 
         # Constraint: Each shift needs 2 or 3 people
@@ -126,26 +169,28 @@ class Scheduler:
             for d in week_days:
                 for h in work_turns:
                     if h in turns:
-                        prob += lpSum(x[p][d][h] for p in peoples) == people_number, f"Shift_{d}_{h}_{people_number}_People"
+                        prob += lpSum(x[p][d][h] for p in people) == people_number, f"Shift_{d}_{h}_{people_number}_People"
 
         # Constraint: Default shift needs 2 people 
         for d in week_days:
             for h in work_turns:
                 if h in turns_with_fix_people:
                     continue
-                prob += lpSum(x[p][d][h] for p in peoples) == self.default_people_number_per_turn, f"Shift_{d}_{h}_max_default_people"
+                prob += lpSum(x[p][d][h] for p in people) == self.default_people_number_per_turn, f"Shift_{d}_{h}_max_default_people"
 
         # Constraint: Ensure that each person is only scheduled when available
-        for p in peoples:
+        for p in people:
             for d in week_days:
                 for h in work_turns:
                     if h not in availability[p][d]: 
                         prob += x[p][d][h] == 0, f"Unavailability_{p}_{d}_{h}"
 
+        # for p in people:
+        #     prob += lpSum(x[p][d][h] for d in week_days for h in work_turns) >= 2 * 2, f"{p}_minimal_work"
 
         # Constraint: Ensure that each person works close to the desired weekly workload
         delta_h = 1
-        for p in peoples:
+        for p in people:
             if p not in self.work_load:
                 continue
             
@@ -160,7 +205,7 @@ class Scheduler:
 
 
         # Constraint: Distribute who opens and closes the day evenly throughout the week
-        for p in peoples:
+        for p in people:
             prob += lpSum(
                 x[p][d][self.open_turn] for d in week_days if self.open_turn in availability[p].get(d, set())
             ) <= self.max_open_per_people, f"Balanced_Weekly_Opening_{p}"
@@ -172,18 +217,27 @@ class Scheduler:
 
         # Constraint: Ensure everyone doesn't exceed the maximum work load per day
         if self.max_load_per_day is not None:
-            for p in peoples:
+            for p in people:
                 for d in week_days:
                     prob += lpSum(x[p][d][h] for h in work_turns) <= self.max_load_per_day*2, f"Max_Load_{p}_{d}"
+        
+        # Constraint: Ensure everyone doesn't exceed the maximum/minimum work load per week
+        if self.min_load_per_week is not None:
+            for p in people:
+                prob += lpSum(x[p][d][h] for d in week_days for h in work_turns) >= self.min_load_per_week*2, f"Min_Load_Week_{p}"
+        
+        if self.max_load_per_week is not None:
+            for p in people:
+                prob += lpSum(x[p][d][h] for d in week_days for h in work_turns) <= self.max_load_per_week*2, f"Max_Load_Week_{p}"
 
         prob.solve()
 
-        # Display solution status
-        print(f"Status da solução: {LpStatus[prob.status]}\n")
+        logging.info("Escala gerada!")
+        logging.info(f"Status da solução: {LpStatus[prob.status]}\n")
 
         # Generate schedule
         schedule = {d: {h: [] for h in work_turns} for d in week_days}
-        for p in peoples:
+        for p in people:
             for d in week_days:
                 for h in work_turns:
                     if x[p][d][h].value() == 1:
@@ -230,6 +284,10 @@ class Scheduler:
         df = pd.DataFrame(data, columns=["Início", "Fim"] + week_days)
         df.to_csv(path, index=False) 
 
+        import os
+        absolute_path = os.path.abspath(path)
+        logging.info(f"Escala salva em: {absolute_path}")
+
     def calc_work_load(self, path):
         "Calculates total work load per person and save it at `path` as a .csv"
         total_work = []
@@ -238,7 +296,13 @@ class Scheduler:
             for d in week_days:
                 for h in self.work_turns.turns_str:
                     p_work += self.x[p][d][h].value()
-            total_work.append([p, p_work / 2])
+
+            if p not in self.preference_work_load:
+                w_rel = None
+            else:
+                w_rel = p_work / self.preference_work_load[p]
+            
+            total_work.append([p, p_work / 2, w_rel])
         
-        df = pd.DataFrame(total_work, columns=["Pessoa", "Carga Horária (Horas)"])
+        df = pd.DataFrame(total_work, columns=["Pessoa", "Carga Horária (Horas)", "Carga Relativa"])
         df.to_csv(path, index=False)

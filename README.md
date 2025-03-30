@@ -41,13 +41,13 @@ sched.add_fix_people_turns(
 sched.generate(
     preference_path="preferencia.ods",
     availability_path="possibilidade.ods",
-    sheet_name="sheet_name",
 )
 
 # Mostra onde a disponibilidade foi violada
 print("Violações da disponibilidade:")
 for people, turns in sched.problems.availability.items():
     print(people, turns)
+print()
 
 # Salva a escala como .csv
 sched.save("escala.csv")
