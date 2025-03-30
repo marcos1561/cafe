@@ -7,3 +7,6 @@ logging.basicConfig(
     # format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",  # Log format
     format="%(levelname)s: %(message)s",  # Log format
 )
+
+def hello():
+    print("Hello!")
