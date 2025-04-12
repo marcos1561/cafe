@@ -82,6 +82,9 @@ class TurnList:
         else:
             raise ValueError(f"Cannot add TurnList with {type(other)}")
 
+    def __len__(self):
+        return len(self.turns)
+
 if __name__ == "__main__":
     a = TurnList.from_start_end("07:30-08:00", "12:00-12:30")
     b = TurnList.from_start_end("14:00-14:30", "15:30-16:00")

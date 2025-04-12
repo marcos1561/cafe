@@ -1,7 +1,9 @@
-from pulp import LpProblem, LpVariable, lpSum, LpMaximize, LpStatus
+from pulp import LpProblem, LpVariable, lpSum, LpMaximize, LpStatus, PULP_CBC_CMD
 import pandas as pd
 from collections import namedtuple
 import logging
+import numpy as np
+from pathlib import Path
 
 from . import reader
 from .turns import TurnList
@@ -40,9 +42,12 @@ class Scheduler:
             When the cafe closes
 
         people_boost:
-            Map between people and its boost in the objective function. If its value
-            is greater/less than 1, for a give person, this person will tend to gain more/less
-            work hours. 
+            Map between people and its boost in the objective function. The name
+            used should be the same as the one in the preference/availability sheets.
+            If the boost is greater/less than 1, for a give person, this person will tend to gain more/less
+            work hours. Example boosting work hours for Marcos:
+            
+            >>> shed = Scheduler(people_boost={"Marcos": 1.5})
 
         desired_work_load:
             Map between people and its desired total work load in the week in hours.
@@ -89,6 +94,8 @@ class Scheduler:
         self.fix_people_hours: list[FixPeopleHours] = []
 
         self.preference_work_load: dict = None
+        self.preference = None
+        self.availability = None
 
         self.x = None
         self.schedule = None
@@ -114,6 +121,9 @@ class Scheduler:
         preference: dict = reader.read_schedule(preference_path, preference_sheet_name)
         availability: dict = reader.read_schedule(availability_path, availability_sheet_name)
 
+        self.preference = preference
+        self.availability = availability
+
         work_turns = self.work_turns.turns_str
 
         for p, day_turn in preference.items():
@@ -127,6 +137,12 @@ class Scheduler:
                         availability[p][day].add(t)
 
         people = list(availability.keys())
+
+        # If a person does not have a preference, is assumed 
+        # that his preference is the same as his availability.
+        for p in people:
+            if p not in preference:
+                preference[p] = availability[p]
 
         # Creating decision variables x[person][day][hour]
         x = {
@@ -230,7 +246,7 @@ class Scheduler:
             for p in people:
                 prob += lpSum(x[p][d][h] for d in week_days for h in work_turns) <= self.max_load_per_week*2, f"Max_Load_Week_{p}"
 
-        prob.solve()
+        prob.solve(PULP_CBC_CMD(msg=False))
 
         logging.info("Escala gerada!")
         logging.info(f"Status da solução: {LpStatus[prob.status]}\n")
@@ -249,7 +265,7 @@ class Scheduler:
         self.x = x
 
     def check_availability(self, variables: dict, availability: dict):
-        "Returns a list of where availability was violated"
+        "Returns a list of where availability was violated."
         problems = {}
         for people, days in variables.items():
             days: dict
@@ -265,6 +281,20 @@ class Scheduler:
                         problems[people].append((day, turn))
         return problems                    
 
+    def save_sheet_turns(self, sheet, path):
+        data = np.full((len(self.work_turns), len(week_days)), "", dtype=object)
+
+        for person, week_turns in sheet.items():
+            for day, day_turns in week_turns.items():
+                for turn in day_turns:
+                    col_id = week_days.index(day)
+                    row_id = self.work_turns.turns_str.index(turn)
+                    data[row_id, col_id] += f"{person}, " 
+
+        df = pd.DataFrame(data, columns=week_days, index=self.work_turns.turns_str)
+        df.to_csv(path)
+
+
     def show(self):
         "Show schedule generated."
         for d in week_days:
@@ -272,7 +302,7 @@ class Scheduler:
             for h in self.work_turns.turns_str:
                 print(f"{h}: {', '.join(self.schedule[d].get(h, []))}")
 
-    def save(self, path):
+    def save(self, path, save_pref_avail=True):
         "Save schedule generated at `path` as a .csv"
         data = []
         for h in self.work_turns.turns_str:
@@ -283,6 +313,10 @@ class Scheduler:
 
         df = pd.DataFrame(data, columns=["Início", "Fim"] + week_days)
         df.to_csv(path, index=False) 
+
+        if save_pref_avail:
+            self.save_sheet_turns(self.preference, Path(path).parent / "preferencia_cafe.csv")
+            self.save_sheet_turns(self.availability, Path(path).parent / "disponibilidade_cafe.csv")
 
         import os
         absolute_path = os.path.abspath(path)
@@ -302,7 +336,7 @@ class Scheduler:
             else:
                 w_rel = p_work / self.preference_work_load[p]
             
-            total_work.append([p, p_work / 2, w_rel])
+            total_work.append([p, p_work/2, self.preference_work_load[p]/2, w_rel])
         
-        df = pd.DataFrame(total_work, columns=["Pessoa", "Carga Horária (Horas)", "Carga Relativa"])
+        df = pd.DataFrame(total_work, columns=["Pessoa", "Carga Ganha (Horas)", "Carga Solicitada (Horas)", "Carga Relativa"])
         df.to_csv(path, index=False)

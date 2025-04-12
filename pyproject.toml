@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cafe"
-version = "0.0.5"
+version = "0.0.6"
 authors = [
   { name="Marcos Pasa", email="marcospasa130@gmail.com" },
 ]
@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
   "pandas",
+  "numpy",
   "pulp",
   "odfpy",
 ]

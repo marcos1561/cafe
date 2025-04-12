@@ -51,5 +51,7 @@ def read_schedule(path, sheet=None):
     
     return schedule
 
+
+
 if __name__ == "__main__":
     read_schedule("preferencia.ods")
