@@ -12,7 +12,7 @@ from .constants import *
 # Define a logger for this module
 logger = logging.getLogger(__name__)
 
-FixPeopleHours = namedtuple('FixPeopleHours', ['turns', 'people_number'])
+FixPeopleHours = namedtuple('FixPeopleHours', ['turns', 'people_number', 'days'])
 
 class ScheduleProblems:
     def __init__(self):
@@ -101,13 +101,26 @@ class Scheduler:
         self.schedule = None
         self.problems = ScheduleProblems()
 
-    def add_fix_people_turns(self, turns: TurnList, people_number: int):
-        "Add turn where there should be `people_number` people at the cafe."
+    def add_fix_people_turns(self, turns: TurnList, people_number: int, days="all"):
+        "Add turns where there should be `people_number` people at the cafe."
         if isinstance(turns, list):
             turns = TurnList(turns)
 
+        filtered_turns = []
+        for t in turns:
+            if t in self.work_turns:
+                filtered_turns.append(t)
+        turns = TurnList(filtered_turns)
+
+        if days == "all":
+            days = week_days
+        else:
+            for d in days:
+                if d not in week_days:
+                    raise ValueError(f"O dia '{d}' em `days` não está na lista de dias: {week_days}.")
+
         self.fix_people_hours.append(
-            FixPeopleHours(turns=turns, people_number=people_number)
+            FixPeopleHours(turns=turns, people_number=people_number, days=days)
         )
 
     def generate(self, preference_path, availability_path, preference_sheet_name=None, availability_sheet_name=None):
@@ -175,22 +188,21 @@ class Scheduler:
         ), "Maximize Preferred Hours"
 
         # Constraint: Each shift needs 2 or 3 people
-        turns_with_fix_people = set()
+        turns_with_fix_people = {d: set() for d in week_days}
         for fix_people_hours in self.fix_people_hours:
             people_number = fix_people_hours.people_number
             turns = fix_people_hours.turns.turns_str
+            days = fix_people_hours.days
 
-            turns_with_fix_people.update(turns)
-
-            for d in week_days:
-                for h in work_turns:
-                    if h in turns:
-                        prob += lpSum(x[p][d][h] for p in people) == people_number, f"Shift_{d}_{h}_{people_number}_People"
+            for d in days:
+                turns_with_fix_people[d].update(turns)
+                for h in turns:
+                    prob += lpSum(x[p][d][h] for p in people) == people_number, f"Shift_{d}_{h}_{people_number}_People"
 
         # Constraint: Default shift needs 2 people 
         for d in week_days:
             for h in work_turns:
-                if h in turns_with_fix_people:
+                if h in turns_with_fix_people[d]:
                     continue
                 prob += lpSum(x[p][d][h] for p in people) == self.default_people_number_per_turn, f"Shift_{d}_{h}_max_default_people"
 

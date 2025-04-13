@@ -82,8 +82,15 @@ class TurnList:
         else:
             raise ValueError(f"Cannot add TurnList with {type(other)}")
 
+    def __contains__(self, item):
+        item = Turn(item)
+        return item in self.turns
+
     def __len__(self):
         return len(self.turns)
+    
+    def __iter__(self):
+        return iter(self.turns)
 
 if __name__ == "__main__":
     a = TurnList.from_start_end("07:30-08:00", "12:00-12:30")
