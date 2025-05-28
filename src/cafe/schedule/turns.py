@@ -42,6 +42,9 @@ class Turn:
         init = f"{self.init.hour:02}:{self.init.minute:02}"
         end = f"{self.end.hour:02}:{self.end.minute:02}"
         return f"{init}-{end}"
+    
+    def __repr__(self):
+        return self.__str__()
 
     def __eq__(self, other):
         if isinstance(other, Turn):
@@ -53,6 +56,16 @@ class Turn:
     
     def next(self):
         return Turn(self.end, duration=self.duration)
+
+    def __lt__(self, other):
+        if isinstance(other, Turn):
+            return self.init < other.init
+        return NotImplemented
+
+    def __gt__(self, other):
+        if isinstance(other, Turn):
+            return self.init > other.init
+        return NotImplemented
 
 
 class TurnList:

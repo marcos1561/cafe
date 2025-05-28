@@ -1,8 +1,11 @@
 import pandas as pd
 import datetime
-from .constants import week_days
+import numpy as np
+from .turns import Turn
 
-def read_schedule(path, sheet=None):
+# from .constants import week_days
+
+def read_schedule(path, sheet=None, return_week_turns=False):
     '''
     Read schedule from .ods file at `path` in the
     sheet `sheet`.
@@ -21,6 +24,8 @@ def read_schedule(path, sheet=None):
         data = list(data.values())[0]
 
     schedule = {}
+    week_days = list(data.columns[2:])
+    turns = []
 
     def hour_to_str(hour):
         if isinstance(hour, datetime.time):
@@ -32,8 +37,9 @@ def read_schedule(path, sheet=None):
 
     # Iterate over data rows
     for _, row in data.iterrows():
-        hour = f"{hour_to_str(row['Início'])}-{hour_to_str(row['Fim'])}"
-        
+        turn = f"{hour_to_str(row['Início'])}-{hour_to_str(row['Fim'])}"
+        turns.append(turn)
+
         for d in week_days:
             names = row[d]
             if type(names) is not str:
@@ -47,11 +53,43 @@ def read_schedule(path, sheet=None):
                 if name not in schedule:
                     schedule[name] = {d: set() for d in week_days}
 
-                schedule[name][d].add(hour)
+                schedule[name][d].add(turn)
     
-    return schedule
+    if return_week_turns:
+        return schedule, week_days, turns
+    else:
+        return schedule
 
+def read_target_work_load(path, sheet=None):
+    data = pd.read_excel(path, sheet_name=sheet, engine='odf')
 
+    if sheet is None:
+        data = list(data.values())[0]
+
+    return dict(zip(data.iloc[:, 0], data.iloc[:, 1] * 2))
+
+def read_target_work_load(path, sheet_name=None):
+    data = pd.read_excel(path, sheet_name=sheet_name, engine='odf')
+
+    if sheet_name is None:
+        data = list(data.values())[0]
+
+    return dict(zip(data.iloc[:, 0], data.iloc[:, 1] * 2))
+
+def read_people_number(path, sheet_name=None):
+    data = pd.read_excel(path, sheet_name=sheet_name, engine='odf')
+
+    if sheet_name is None:
+        data = list(data.values())[0]
+
+    data.index = [
+        str(Turn(f"{row['Início']}-{row['Fim']}"))
+        for _, row in data.iterrows()
+    ]
+
+    data.drop(columns=["Início", "Fim"], inplace=True)
+
+    return data
 
 if __name__ == "__main__":
     read_schedule("preferencia.ods")
