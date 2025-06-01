@@ -4,9 +4,13 @@ import numpy as np
 from pathlib import Path
 from abc import ABC, abstractmethod
 from collections import namedtuple
+import os
 
-from . import reader
+from . import readers
 from .turns import TurnList
+
+# Define a logger for this module
+logger = logging.getLogger(__name__)
 
 Mappers = namedtuple('Mappers', [
     'turn_to_id', 'id_to_turn', 
@@ -16,40 +20,34 @@ Mappers = namedtuple('Mappers', [
 
 class Sheets:
     def __init__(self, 
-        pref_path, avail_path, target_work_load_path, people_number_path,
-        pref_sheet=None, avail_sheet=None, target_work_load_sheet=None,
-        people_number_sheet=None, sheet_name=None,
-        ):
+        pref_path: readers.FileInfo, avail_path: readers.FileInfo, target_work_load_path: readers.FileInfo, turn_capacity_path: readers.FileInfo):
         '''
-        Sheets with data to generate a schedule.
+        Sheets with data to generate a schedule. Each path can be a string
+        representing the file path or a `FileInfo` object when additional
+        information, such as a sheet name, is needed.
 
-        OBS: Preference and availability are adjusted to availability be a super set
-        of preference and people with no preference have their preference the same as the
-        availability.
+        OBS: Preference and availability are adjusted so that availability becomes a superset
+        of preference, and people with no preference have their preference set to match
+        their availability.
 
         Parameters
         ----------
         pref_path:
-            People preference data path.
+            People preference file path.
 
         avail_path:
-            People availability data path.
+            People availability file path.
         
         target_work_load_path:
-            People desired work load data path.
+            People desired work load file path.
         
-        people_number_path:
-            Target people number per turn path.
+        turn_capacity_path:
+            Target number of people per turn file path.
         '''
-        if sheet_name is not None:
-            pref_sheet = sheet_name
-            avail_sheet = sheet_name
-            target_work_load_sheet = sheet_name
-
-        self.pref, week_days1, turns1 = reader.read_schedule(pref_path, pref_sheet, return_week_turns=True)
-        self.avail, week_days2, turns2 = reader.read_schedule(avail_path, avail_sheet, True)
-        self.target_work_load = reader.read_target_work_load(target_work_load_path, target_work_load_sheet)
-        self.people_number = reader.read_people_number(people_number_path, people_number_sheet)
+        self.pref, week_days1, turns1 = readers.ScheduleReader.read(pref_path, True)
+        self.avail, week_days2, turns2 = readers.ScheduleReader.read(avail_path, True)
+        self.target_work_load = readers.TargetWorkLoadReader.read(target_work_load_path)
+        self.turn_capacity = readers.TurnCapacityReader.read(turn_capacity_path)
 
         if week_days1 != week_days2:
             raise Exception((
@@ -139,7 +137,16 @@ class SchedulerBase(ABC):
     def generate(self):
         pass
     
-    def save(self, path: Path, save_pref_avail=True):
+    def add_missing_people(self):
+        for day in self.sheets.week_days:
+            for turn in self.sheets.turns:
+                current_num = len(self.schedule[day][str(turn)])
+                target_num = self.sheets.turn_capacity.loc[str(turn), day]
+                missing_num = max(0, target_num - current_num)
+                for _ in range(missing_num):
+                    self.schedule[day][str(turn)].append("FALTANDO")
+
+    def save(self, path: Path):
         "Save schedule generated at `path` as a .csv"
         week_days = self.sheets.week_days
         turns = self.sheets.turns
@@ -154,13 +161,8 @@ class SchedulerBase(ABC):
         df = pd.DataFrame(data, columns=["Início", "Fim"] + week_days)
         df.to_csv(path, index=False) 
 
-        if save_pref_avail:
-            self.sheets.save_avail(Path(path).parent / "disponibilidade_cafe.csv")
-            self.sheets.save_pref(Path(path).parent / "preferencia_cafe.csv")
-
-        import os
         absolute_path = os.path.abspath(path)
-        logging.info(f"Escala salva em: {absolute_path}")
+        logger.info(f"Escala salva em: {absolute_path}")
 
     def save_work_load(self, path, target_work_load=None):
         "Calculates total work load per person and save it at `path` as a .csv"
@@ -185,3 +187,29 @@ class SchedulerBase(ABC):
         df = pd.DataFrame(total_work, columns=["Pessoa", "Carga Ganha (Horas)", "Carga Solicitada (Horas)", "Carga Relativa"])
         df.to_csv(path, index=False)
 
+        logger.info(f"Carga horária salva em: {os.path.abspath(path)}")
+
+    def save_pref_avail(self, path):
+        self.sheets.save_avail(Path(path) / "disponibilidade_cafe.csv")
+        self.sheets.save_pref(Path(path) / "preferencia_cafe.csv")
+        logger.info(f"Disp. e Pref. salvas na pasta: {os.path.abspath(path)}")
+    
+    @staticmethod
+    def load_schedule(path):
+        df = pd.read_csv(path)
+        schedule = {}
+        for day in df.columns[2:]:
+            schedule[day] = {}
+            for id, people in df[day].items():
+                if pd.isna(people):
+                    schedule[day][turn] = []
+                    continue
+                turn = f"{df.loc[id, 'Início']}-{df.loc[id, 'Fim']}"
+                people_list = []
+                for p in people.split(","):
+                    if p.strip() == "FALTANDO":
+                        continue
+                    people_list.append(p.strip())
+
+                schedule[day][turn] = people_list
+        return schedule

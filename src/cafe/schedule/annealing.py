@@ -3,6 +3,8 @@ from math import exp
 import random
 from typing import Literal
 from abc import ABC, abstractmethod
+import pandas as pd
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
@@ -49,7 +51,7 @@ class TempConst(TempStrategy):
 
 class SystemParams:
     def __init__(self, k_disp, k_border, k_fix_people_gt, k_fix_people_sm, k_fix_people_sm_peak, k_lunch, k_continuos_lunch,
-        k_no_people, k_work_load, k_overflow_work_load, k_pref, temp_strat: TempStrategy, lunch_min_free_turns=2):
+        k_no_people, k_work_load, k_overflow_work_load, k_pref, temp_strat: TempStrategy | list[TempStrategy], lunch_min_free_turns=2):
         '''
         Parameters for the annealing schedule.
         
@@ -89,7 +91,8 @@ class SystemParams:
             Coefficient for preferring hours in the preference.
         
         temp_strat: 
-            Temperature decay strategy.
+            Temperature decay strategy. It can be a list of strategies, is this
+            case every strategy is executed in order.
 
         lunch_min_free_turns: 
             Number of turns everyone needs for lunch.
@@ -112,13 +115,13 @@ class SystemParams:
 class ScheduleSystem:
     def __init__(self, 
         x: np.ndarray, pref: np.ndarray, disp: np.ndarray, target_work_load: np.ndarray,
-        people_number: np.ndarray, weights: np.ndarray, 
+        turn_capacity: np.ndarray, weights: np.ndarray, 
         params: SystemParams, lunch_ids, peak_ids,
         ):
         self.pref = pref
         self.disp = disp
         self.params = params
-        self.people_number = people_number
+        self.turn_capacity = turn_capacity
         
         self.lunch_ids = lunch_ids
         self.peak_ids = peak_ids
@@ -127,7 +130,7 @@ class ScheduleSystem:
 
         disp_work_load = np.sum(disp * weights[None, ...], axis=(1, 2))
 
-        total_wl = (self.people_number * self.weights).sum()
+        total_wl = (self.turn_capacity * self.weights).sum()
         num_p = x.shape[0]
         avg_wl = total_wl / num_p 
         self.target_work_load = np.empty_like(target_work_load, dtype=float)
@@ -174,7 +177,8 @@ class ScheduleSystem:
     def work_load_energy(self):
         g = np.sum(self.x * self.weights[None, ...], axis=(1, 2))
 
-        lower_max = g < self.max_work_load
+        # lower_max = g < self.max_work_load
+        lower_max = g < self.target_work_load
         bigger_max = ~lower_max
 
         k = self.params.k_work_load
@@ -195,13 +199,13 @@ class ScheduleSystem:
 
     def fix_people_energy(self):
         p_num = self.x.sum(axis=0)
-        p_diff = p_num - self.people_number
+        p_diff = p_num - self.turn_capacity
         gt_mask = p_diff > 0
 
         e1 = self.params.k_fix_people_gt * p_diff[gt_mask].sum() 
         e2 = (np.abs((p_diff * self.k_sm_fix_people_matrix)[~gt_mask])**1).sum()
 
-        e3 = (p_num[self.people_number != 0] == 0).sum() * self.params.k_no_people
+        e3 = (p_num[self.turn_capacity != 0] == 0).sum() * self.params.k_no_people
 
         # return self.params.k_fix_people/2 * ((p_num - self.people_number)**2).sum()
         return e1 + e2 + e3
@@ -227,41 +231,44 @@ class ScheduleSystem:
         return self.work_load_energy() + self.pref_energy() + self.disp_energy() + self.boarder_energy() + self.fix_people_energy() + self.lunch_energy()
     
     def run(self):
+        strats: list[TempStrategy] = self.params.temp_strat
+        if not isinstance(strats, list):
+            strats = [strats]
+
         energy = [self.energy()]
-        for i in range(self.params.temp_strat.num_steps):
-            temp = self.params.temp_strat.get_temp(i)
+        for strat in strats:
+            for i in range(strat.num_steps):
+                temp = strat.get_temp(i)
 
-            for idx in np.ndindex(self.x.shape):
-                e1 = self.energy()
-                self.x[idx] = 1 - self.x[idx]
-                e2 = self.energy()
-
-                de = e2 - e1
-                
-                accept = False
-                if de > 0:
-                    if random.random() < exp(-1/temp * de):
-                        accept = True
-                else:
-                    accept = True
-
-                if not accept:                
+                for idx in np.ndindex(self.x.shape):
+                    e1 = self.energy()
                     self.x[idx] = 1 - self.x[idx]
+                    e2 = self.energy()
 
-            energy.append(self.energy())
+                    de = e2 - e1
+                    
+                    accept = False
+                    if de > 0:
+                        if random.random() < exp(-1/temp * de):
+                            accept = True
+                    else:
+                        accept = True
+
+                    if not accept:                
+                        self.x[idx] = 1 - self.x[idx]
+
+                energy.append(self.energy())
 
         return energy
     
     def get_problems(self, mappers):
         problems = {}
         problems["lunch"] = self.launch_problem(mappers)
-        problems["disp"] = self.disp_problem(mappers)
-        problems["number"] = self.number_people_problem(mappers)
+        problems["availability"] = self.disp_problem(mappers)
+        problems["turn_capacity"] = self.number_people_problem(mappers)
         return problems
 
     def launch_problem(self, mappers):
-        lunch_free = len(self.lunch_ids) - self.x[:, self.lunch_ids, :].sum(axis=1)
-
         x_lunch = self.x[:, self.lunch_ids, :]
         has_continuos_lunch = np.full((self.x.shape[0], self.x.shape[2]), False)
         for mask in self.lunch_masks:
@@ -276,7 +283,7 @@ class ScheduleSystem:
                 for d_id, d in mappers.id_to_week_day.items():
                     if problems[p_id, d_id]:
                         info.append((p, d))
-        return info
+        return pd.DataFrame(info, columns=["Pessoa", "Dia"])
     
     def disp_problem(self, mappers):
         problems = np.logical_and(self.x != self.disp, self.disp == 0)
@@ -289,18 +296,21 @@ class ScheduleSystem:
                         if p not in info:
                             info[p] = []
                         info[p].append((d, t))
-        return info
+        
+        info_df = pd.DataFrame.from_dict(info, orient='index').transpose()
+
+        return info_df
 
     def number_people_problem(self, mappers):
         count = np.sum(self.x, axis=0)
-        problems = count < self.people_number
+        problems = count != self.turn_capacity
 
         info = []
         for t_id, t in mappers.id_to_turn.items():
             for d_id, d in mappers.id_to_week_day.items():
                 if problems[t_id, d_id]:
-                    info.append((d, t, int(count[t_id, d_id]), int(self.people_number[t_id, d_id])))
-        return info
+                    info.append((d, t, int(count[t_id, d_id]), int(self.turn_capacity[t_id, d_id])))
+        return pd.DataFrame(info, columns=["Dia", "Turno", "Atual", "Alvo"])
 
 def sheets_to_matrix(sheet, sheets: Sheets):
         num_people = len(sheets.people)
@@ -359,7 +369,6 @@ class AnnealingSched(SchedulerBase):
         self.peak_ids = [self.sheets.mappers.turn_to_id[str(t)] for t in peak_turns]
         self.init_state = init_state
 
-        self.linear_sched = self.get_linear_scheduler()
         self.anneal_system: ScheduleSystem = None
         self.energy: np.ndarray = None
 
@@ -369,12 +378,12 @@ class AnnealingSched(SchedulerBase):
             turns_weights=self.turns_weights,
         )
 
-        for day in self.sheets.people_number.columns:
-            turn_3 = [turn for turn, value in self.sheets.people_number[day].items() if value == 3]
+        for day in self.sheets.turn_capacity.columns:
+            turn_3 = [turn for turn, value in self.sheets.turn_capacity[day].items() if value == 3]
             if len(turn_3) > 0:
                 sched.add_fix_people_turns(
-                    turns=[turn for turn, value in self.sheets.people_number[day].items() if value == 3],
-                    people_number=3,
+                    turns=[turn for turn, value in self.sheets.turn_capacity[day].items() if value == 3],
+                    capacity=3,
                     days=[day],
                 )
 
@@ -412,15 +421,21 @@ class AnnealingSched(SchedulerBase):
         return schedule
 
     def generate(self):
-        self.linear_sched.generate()
-        # print("Problemas (Linear):")
-        # print(self.linear_sched.problems.availability)
-
         if self.init_state == "linear_sched":
-            x_mat = self.schedule_to_x_mat(self.linear_sched.schedule)
+            linear_sched = self.get_linear_scheduler()
+            
+            linear_sched.generate()
+            # print("Problemas (Linear):")
+            # print(self.linear_sched.problems.availability)
+            
+            x_mat = self.schedule_to_x_mat(linear_sched.schedule)
         elif self.init_state == "random":
             shape = (len(self.sheets.people), len(self.sheets.turns), len(self.sheets.week_days))
             x_mat = np.random.randint(0, 2, size=shape, dtype=int)
+        elif isinstance(self.init_state, dict):
+            x_mat = self.schedule_to_x_mat(self.init_state)
+        else:
+            raise ValueError("Init State not valid! It should be a schedule (dict) or a valid string.")
 
         aval_mat = sheets_to_matrix(self.sheets.avail, self.sheets)
         pref_mat = sheets_to_matrix(self.sheets.pref, self.sheets)
@@ -428,37 +443,41 @@ class AnnealingSched(SchedulerBase):
         mappers = self.sheets.mappers
 
         shape = (len(self.sheets.turns), len(self.sheets.week_days))
-        people_number_mat = np.empty(shape, dtype=int)
-        for t, row in self.sheets.people_number.iterrows():
+        turn_capacity_mat = np.empty(shape, dtype=int)
+        for t, row in self.sheets.turn_capacity.iterrows():
             for day, value in row.items():
-                people_number_mat[mappers.turn_to_id[t], mappers.week_day_to_id[day]] = value
+                turn_capacity_mat[mappers.turn_to_id[t], mappers.week_day_to_id[day]] = value
 
         target_work_load_mat = np.full(x_mat.shape[0], None)
         for name, wl in self.sheets.target_work_load.items():
             target_work_load_mat[mappers.person_to_id[name]] = wl
 
-        turns_wights_mat = np.ones_like(people_number_mat)
+        turns_wights_mat = np.ones_like(turn_capacity_mat)
         for (day, turn), w in self.turns_weights.items():
             turns_wights_mat[mappers.turn_to_id[str(turn)], mappers.week_day_to_id[day]] = w
 
         self.anneal_system = ScheduleSystem(
             x_mat, pref_mat, aval_mat, target_work_load_mat, 
-            people_number_mat, turns_wights_mat, 
+            turn_capacity_mat, turns_wights_mat, 
             self.params, self.lunch_ids, self.peak_ids,
         )
         self.energy = self.anneal_system.run()
-        self.anneal_system.params.temp_strat = TempConst(0.001, 5)
-        self.anneal_system.run()
 
         self.schedule = self.x_mat_to_schedule(self.anneal_system.x)
 
-    def show_problems(self):
-        print("\nProblemas:")
+    def show_problems(self, path=None):
+        "Show schedule problems. If `path` is a folder path, problems will be saved inside `path`."
+        if path is None:
+            print("\nProblemas:")
+        
         # print(sched.check_availability(sched.schedule, sched.availability))
         for p_name, p_info in self.anneal_system.get_problems(self.sheets.mappers).items():
-            print(f"{p_name}:")
-            print(p_info)
-            print()
+            if path is None:
+                print(f"{p_name}:")
+                print(p_info)
+                print()
+            else:
+                p_info.to_csv(Path(path) / f"{p_name}.csv", index=False)
 
     def show_energy(self):
         plt.plot(self.energy, marker='o', linestyle='-')

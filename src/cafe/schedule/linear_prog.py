@@ -3,7 +3,7 @@ from collections import namedtuple
 import copy
 import logging
 
-from . import reader
+from . import readers
 from .turns import TurnList, Turn
 from .base import SchedulerBase, Sheets
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 #==
 # Linear Programming
 #==
-FixPeopleHours = namedtuple('FixPeopleHours', ['turns', 'people_number', 'days'])
+FixPeopleHours = namedtuple('FixPeopleHours', ['turns', 'capacity', 'days'])
 
 class ScheduleProblems:
     def __init__(self):
@@ -24,7 +24,7 @@ class LinearProgSched(SchedulerBase):
         people_boost:dict[str, float]=None, desired_work_load: dict[str, float]=None,
         max_open_per_people=2, max_close_per_people=2, 
         max_load_per_day=None, max_load_per_week=None, min_load_per_week=None,
-        default_people_number_per_turn=2,
+        default_turn_capacity=2,
         turns_weights: dict = None,
     ):
         '''
@@ -64,7 +64,7 @@ class LinearProgSched(SchedulerBase):
         max_load_per_week, min_load_per_week:
             Maximum/Minimum number of hours a person should work in a week. If `None`, there is no limit.
         
-        default_people_number_per_turn:
+        default_turn_capacity:
             Default number of people per turn. This constraint is override for turns
             specified by `add_fix_people_turns()`
         '''
@@ -87,7 +87,7 @@ class LinearProgSched(SchedulerBase):
         self.max_load_per_day = max_load_per_day
         self.max_load_per_week = max_load_per_week
         self.min_load_per_week = min_load_per_week
-        self.default_people_number_per_turn = default_people_number_per_turn
+        self.default_turn_capacity = default_turn_capacity
 
         if desired_work_load is None:
             desired_work_load = {}
@@ -106,8 +106,8 @@ class LinearProgSched(SchedulerBase):
         self.x = None
         self.problems = ScheduleProblems()
 
-    def add_fix_people_turns(self, turns: TurnList, people_number: int, days="all"):
-        "Add turns where there should be `people_number` people at the cafe."
+    def add_fix_people_turns(self, turns: TurnList, capacity: int, days="all"):
+        "Add turns where there should be `capacity` people at the cafe."
         if isinstance(turns, list):
             turns = TurnList(turns)
 
@@ -127,7 +127,7 @@ class LinearProgSched(SchedulerBase):
                     raise ValueError(f"O dia '{d}' em `days` não está na lista de dias: {week_days}.")
 
         self.fix_people_hours.append(
-            FixPeopleHours(turns=turns, people_number=people_number, days=days)
+            FixPeopleHours(turns=turns, capacity=capacity, days=days)
         )
 
     def generate(self):
@@ -136,7 +136,7 @@ class LinearProgSched(SchedulerBase):
         peoples availability. After running this method, one can save the
         schedule calling `save()`.
         '''
-        logging.info("Gerando a escala..")
+        logger.info("Gerando a escala..")
 
         preference = copy.deepcopy(self.sheets.pref)
         availability = copy.deepcopy(self.sheets.avail)
@@ -162,7 +162,7 @@ class LinearProgSched(SchedulerBase):
 
         for p in people:
             if p not in preference.keys():
-                logging.warning(f"A pessoa {p} não preencheu a preferência.")
+                logger.warning(f"A pessoa {p} não preencheu a preferência.")
 
         # Creating the maximization problem (prioritizing preferences)
         prob = LpProblem("Weekly_Schedule_Generation", LpMaximize)
@@ -184,21 +184,21 @@ class LinearProgSched(SchedulerBase):
         # Constraint: Each shift needs 2 or 3 people
         turns_with_fix_people = {d: set() for d in week_days}
         for fix_people_hours in self.fix_people_hours:
-            people_number = fix_people_hours.people_number
+            capacity = fix_people_hours.capacity
             turns = fix_people_hours.turns.turns_str
             days = fix_people_hours.days
 
             for d in days:
                 turns_with_fix_people[d].update(turns)
                 for h in turns:
-                    prob += lpSum(x[p][d][h] for p in people) == people_number, f"Shift_{d}_{h}_{people_number}_People"
+                    prob += lpSum(x[p][d][h] for p in people) == capacity, f"Shift_{d}_{h}_{capacity}_People"
 
         # Constraint: Default shift needs 2 people 
         for d in week_days:
             for h in work_turns:
                 if h in turns_with_fix_people[d]:
                     continue
-                prob += lpSum(x[p][d][h] for p in people) == self.default_people_number_per_turn, f"Shift_{d}_{h}_max_default_people"
+                prob += lpSum(x[p][d][h] for p in people) == self.default_turn_capacity, f"Shift_{d}_{h}_max_default_people"
 
         # Constraint: Ensure that each person is only scheduled when available
         for p in people:
@@ -254,8 +254,8 @@ class LinearProgSched(SchedulerBase):
 
         prob.solve(PULP_CBC_CMD(msg=False))
 
-        logging.info("Escala gerada!")
-        logging.info(f"Status da solução: {LpStatus[prob.status]}\n")
+        logger.info("Escala gerada!")
+        logger.info(f"Status da solução: {LpStatus[prob.status]}\n")
 
         # Generate schedule
         schedule = {d: {h: [] for h in work_turns} for d in week_days}
