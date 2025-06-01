@@ -1,4 +1,6 @@
 # cafe
+![Logo do Café da Física](https://github.com/marcos1561/cafe/blob/main/assests/logo.png)
+
 Utilidades para o Café da Física.
 
 # Instalação
