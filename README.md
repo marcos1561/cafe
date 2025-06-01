@@ -1,5 +1,5 @@
 # cafe
-![Logo do Café da Física](https://github.com/marcos1561/cafe/blob/main/assests/logo.png)
+<img src="https://github.com/marcos1561/cafe/blob/main/assets/logo.png" alt="Logo do Café da Física" width="200">
 
 Utilidades para o Café da Física.
 
